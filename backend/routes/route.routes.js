@@ -1,8 +1,9 @@
-const express = require('express');
-const router = express.Router();
-const routeController = require('../controllers/route.controller');
+const express=require("express");
 
-router.get('/', routeController.getRoutes);
-router.post('/', routeController.createRoute);
+const router=express.Router();
 
-module.exports = router;
+const busController=require("../controllers/bus.controller");
+
+router.get("/",busController.getAllBuses);
+
+module.exports=router;

@@ -1,13 +1,10 @@
-const http = require('http');
-const app = require('./app');
-const { port } = require('./config/env');
-const { initSocket } = require('./config/socket');
-const { initLocationSocket } = require('./sockets/location.socket');
+require("dotenv").config();
 
-const server = http.createServer(app);
-const io = initSocket(server);
-initLocationSocket(io);
+const app = require("./app");
 
-server.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(`🚀 Backend Server Running`);
+    console.log(`🌐 http://localhost:${PORT}`);
 });

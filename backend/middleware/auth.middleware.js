@@ -1,7 +1,10 @@
-const jwt = require('jsonwebtoken');
-const { jwtSecret } = require('../config/env');
+const { supabase } = require('../config/supabase');
 
-exports.authenticate = (req, res, next) => {
+/**
+ * Authenticate requests by validating the Supabase access token.
+ * Expected header:  Authorization: Bearer <supabase_access_token>
+ */
+exports.authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -12,14 +15,22 @@ exports.authenticate = (req, res, next) => {
 
   const token = authHeader.split(' ')[1];
 
-  jwt.verify(token, jwtSecret, (error, decoded) => {
-    if (error) {
-      const authError = new Error('Invalid or expired token');
-      authError.status = 401;
-      return next(authError);
-    }
+  // Validate the token against Supabase – this verifies the signature,
+  // expiry, and that the user still exists in the project.
+  const { data, error } = await supabase.auth.getUser(token);
 
-    req.admin = decoded;
-    next();
-  });
+  if (error || !data?.user) {
+    const authError = new Error('Invalid or expired token');
+    authError.status = 401;
+    return next(authError);
+  }
+
+  // Attach user info to the request for downstream handlers
+  req.admin = {
+    id: data.user.id,
+    email: data.user.email,
+    role: data.user.user_metadata?.role || 'admin',
+  };
+
+  next();
 };
