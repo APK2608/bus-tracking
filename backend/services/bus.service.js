@@ -1,5 +1,5 @@
 const { supabase, adminSupabase } = require("../config/supabase");
-const fetch = require("node-fetch");
+const fetch = globalThis.fetch || require("node-fetch");
 
 const ensureWriteClient = () => {
     if (!adminSupabase) {

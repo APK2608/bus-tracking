@@ -7,10 +7,8 @@
      buses    — full bus array (needed to derive position by index)
      onClose  — callback to return to the dashboard
 ───────────────────────────────────────────────────────── */
-import { useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, useMap } from 'react-leaflet';
+import { GoogleMap, MarkerF, useJsApiLoader } from '@react-google-maps/api';
 import { X, Navigation } from 'lucide-react';
-import L from 'leaflet';
 
 // ── Same constants used by MapView ───────────────────────
 const BASE_LAT = 12.9165;
@@ -36,84 +34,12 @@ const getMarkerColor = (status) => {
   return '#f44336';
 };
 
-/** Focused marker icon — slightly larger with a pulsing ring */
-const createFocusedIcon = (color, busLabel) => {
-  const safeLabel = String(busLabel || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return L.divIcon({
-    html: `
-      <div style="
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        pointer-events: none;
-        width: max-content;
-        position: relative;
-      ">
-        <!-- Pulse ring -->
-        <div style="
-          position: absolute;
-          top: -8px;
-          left: -8px;
-          width: 46px;
-          height: 46px;
-          border-radius: 50%;
-          background: ${color}33;
-          animation: trackPulse 1.8s ease-out infinite;
-          z-index: -1;
-        "></div>
-        <!-- Bus circle -->
-        <div style="
-          background-color: ${color};
-          width: 30px;
-          height: 30px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-size: 14px;
-          border: 3px solid white;
-          box-shadow: 0 0 0 3px ${color}88, 0 4px 12px rgba(0,0,0,0.35);
-          flex-shrink: 0;
-        ">&#x1F68C;</div>
-        <!-- Label pill -->
-        <div style="
-          margin-top: 5px;
-          background: #ffffff;
-          border: 1.5px solid #d1d5db;
-          border-radius: 999px;
-          padding: 3px 10px;
-          font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-          font-size: 11px;
-          font-weight: 700;
-          color: #1a202c;
-          white-space: nowrap;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-          letter-spacing: 0.01em;
-          line-height: 1.5;
-          pointer-events: none;
-        ">${safeLabel}</div>
-      </div>
-    `,
-    iconSize: [140, 60],
-    iconAnchor: [15, 15],
-    className: 'custom-bus-marker-focused',
-  });
-};
-
 /** Inner component: centers + zooms the map to the target position */
-function MapFocuser({ lat, lng }) {
-  const map = useMap();
-  const didFly = useRef(false);
-
-  useEffect(() => {
-    if (!didFly.current) {
-      map.flyTo([lat, lng], 15, { duration: 1.2 });
-      didFly.current = true;
-    }
-  }, [map, lat, lng]);
-
-  return null;
+function getBusPositionOrFallback(index, bus) {
+  if (bus.latitude != null && bus.longitude != null) {
+    return { lat: Number(bus.latitude), lng: Number(bus.longitude) };
+  }
+  return getBusPosition(index);
 }
 
 /** Status badge colors */
@@ -147,6 +73,28 @@ export default function TrackLocationView({ bus, buses = [], onClose }) {
     (bus.route && /^\d+-/.test(bus.route) ? bus.route.split('-')[0] : null) ||
     (bus.id && String(bus.id).length < 5 ? bus.id : bus.busNo);
 
+  const { isLoaded, loadError } = useJsApiLoader({
+    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+  });
+
+  const center = getBusPositionOrFallback(busIndex, bus);
+  const markerIcon = {
+    path: window.google.maps.SymbolPath.CIRCLE,
+    fillColor: color,
+    fillOpacity: 1,
+    scale: 12,
+    strokeColor: '#ffffff',
+    strokeWeight: 3,
+  };
+
+  if (loadError) {
+    return <div style={{ padding: 24 }}>Unable to load Google Maps</div>;
+  }
+
+  if (!isLoaded) {
+    return <div style={{ padding: 24 }}>Loading map...</div>;
+  }
+
   return (
     <div className="track-overlay">
       {/* Keyframes for pulse animation */}
@@ -155,11 +103,6 @@ export default function TrackLocationView({ bus, buses = [], onClose }) {
           0%   { transform: scale(0.9); opacity: 0.7; }
           70%  { transform: scale(1.6); opacity: 0; }
           100% { transform: scale(1.6); opacity: 0; }
-        }
-        .custom-bus-marker-focused {
-          background: transparent !important;
-          border: none !important;
-          overflow: visible !important;
         }
       `}</style>
 
@@ -194,26 +137,16 @@ export default function TrackLocationView({ bus, buses = [], onClose }) {
           </button>
         </div>
 
-        {/* ── Map + side info layout ── */}
         <div className="track-body">
-
-          {/* Leaflet map */}
           <div className="track-map-area">
-            <MapContainer
-              center={[lat, lng]}
+            <GoogleMap
+              mapContainerStyle={{ width: '100%', height: '100%' }}
+              center={center}
               zoom={13}
-              style={{ width: '100%', height: '100%' }}
+              options={{ disableDefaultUI: true, clickableIcons: false }}
             >
-              <TileLayer
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-              />
-              <MapFocuser lat={lat} lng={lng} />
-              <Marker
-                position={[lat, lng]}
-                icon={createFocusedIcon(color, busLabel)}
-              />
-            </MapContainer>
+              <MarkerF position={center} icon={markerIcon} />
+            </GoogleMap>
           </div>
 
           {/* ── Side info panel ── */}

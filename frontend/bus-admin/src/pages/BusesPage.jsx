@@ -1,12 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { Plus, Edit2, Trash2, X, Search } from 'lucide-react';
+import { supabase } from '../lib/supabaseClient';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-
-// Helper to get stored JWT token
-const getToken = () => sessionStorage.getItem('authToken');
-
-// Map Supabase column names → frontend field names
 const mapFromDb = (row) => ({
   id: row.id,
   busId: row.bus_number || '',
@@ -18,10 +13,10 @@ const mapFromDb = (row) => ({
   status: row.status || 'Pending (GPS)',
   latitude: row.latitude,
   longitude: row.longitude,
+  capacity: row.capacity,
 });
 
 const BusesPage = ({ buses, setBuses }) => {
-
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBus, setEditingBus] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -34,72 +29,45 @@ const BusesPage = ({ buses, setBuses }) => {
   const emptyForm = { route: '', busNo: '', busId: '', driver: '', contact: '', license: '' };
   const [formData, setFormData] = useState(emptyForm);
 
-  // ── Load buses from Supabase on mount ──────────────────────────────────────
-  useEffect(() => {
-    const fetchBuses = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/buses`, {
-          headers: { Authorization: `Bearer ${getToken()}` },
-        });
-        if (!res.ok) throw new Error(`Failed to load buses (${res.status})`);
-        const data = await res.json();
-        setBuses(Array.isArray(data) ? data.map(mapFromDb) : []);
-      } catch (err) {
-        console.error('fetchBuses:', err.message);
-      }
-    };
-    fetchBuses();
-  }, []);
-
-  // Filter logic
-  const filteredBuses = buses.filter(bus =>
+  const filteredBuses = buses.filter((bus) =>
     (bus.busNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (bus.route || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (bus.driver || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // ── Create / Update ────────────────────────────────────────────────────────
+  const createPayload = () => ({
+    bus_number: formData.busId || null,
+    registration_number: formData.busNo || null,
+    driver_name: formData.driver || null,
+    driver_phone: formData.contact || null,
+    route_name: formData.route || null,
+    license_number: formData.license || null,
+    capacity: null,
+  });
+
   const handleSave = async () => {
     setApiError('');
     setSaving(true);
+
     try {
-      const payload = {
-        busNo: formData.busNo,
-        busId: formData.busId,
-        driver: formData.driver,
-        contact: formData.contact,
-        route: formData.route,
-        license: formData.license,
-      };
+      const payload = createPayload();
 
       if (editingBus) {
-        // UPDATE
-        const res = await fetch(`${API_BASE}/api/buses/${editingBus.id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${getToken()}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.message || 'Update failed');
-        const updated = mapFromDb(json.data);
-        setBuses(buses.map(b => b.id === editingBus.id ? updated : b));
+        const { data, error } = await supabase
+          .from('buses')
+          .update(payload)
+          .eq('id', editingBus.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        const updated = mapFromDb(data);
+        setBuses((prev) => prev.map((bus) => (bus.id === updated.id ? updated : bus)));
       } else {
-        // CREATE
-        const res = await fetch(`${API_BASE}/api/buses`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${getToken()}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.message || 'Create failed');
-        const created = mapFromDb(json.data);
-        setBuses(prev => [...prev, created]);
+        const { data, error } = await supabase.from('buses').insert([payload]).select().single();
+        if (error) throw error;
+        setBuses((prev) => [...prev, mapFromDb(data)]);
       }
 
       setIsModalOpen(false);
@@ -107,26 +75,20 @@ const BusesPage = ({ buses, setBuses }) => {
       setFormData(emptyForm);
     } catch (err) {
       setApiError(err.message || 'Something went wrong. Please try again.');
+      console.error('save bus failed', err);
     } finally {
       setSaving(false);
     }
   };
 
-  // ── Delete ─────────────────────────────────────────────────────────────────
   const confirmDelete = (bus) => setBusToDelete(bus);
 
   const handleDeleteConfirm = async () => {
     setDeleting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/buses/${busToDelete.id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error(json.message || 'Delete failed');
-      }
-      setBuses(buses.filter(b => b.id !== busToDelete.id));
+      const { error } = await supabase.from('buses').delete().eq('id', busToDelete.id);
+      if (error) throw error;
+      setBuses((prev) => prev.filter((bus) => bus.id !== busToDelete.id));
       setBusToDelete(null);
     } catch (err) {
       alert(`Delete failed: ${err.message}`);

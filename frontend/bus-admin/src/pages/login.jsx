@@ -1,6 +1,5 @@
 import { useState } from 'react';
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+import { supabase } from '../lib/supabaseClient';
 
 const Login = ({ onLogin }) => {
   const [email, setEmail] = useState('');
@@ -15,21 +14,20 @@ const Login = ({ onLogin }) => {
     setLoading(true);
 
     try {
-      const response = await fetch(`${API_BASE}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Invalid credentials');
+      if (error || !data?.session) {
+        throw new Error(error?.message || 'Invalid credentials');
       }
 
-      // Pass token + email up to App so it can be stored & used for API calls
+      const token = data.session.access_token;
+      const userEmail = data.user?.email || email;
+
       if (onLogin) {
-        onLogin({ email: data.admin.email, token: data.token });
+        onLogin({ email: userEmail, token });
       }
     } catch (err) {
       setError(err.message || 'Login failed. Please try again.');

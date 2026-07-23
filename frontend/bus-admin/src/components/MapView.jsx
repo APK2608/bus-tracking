@@ -1,6 +1,5 @@
-import { useState } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
-import L from 'leaflet';
+import { useMemo, useRef, useState } from 'react';
+import { GoogleMap, MarkerF, useJsApiLoader } from '@react-google-maps/api';
 
 // Base coordinates for Vellore, Tamil Nadu
 const BASE_LAT = 12.9165;
@@ -30,71 +29,14 @@ const getMarkerColor = (status) => {
   return '#f44336';
 };
 
-/**
- * Creates a Leaflet divIcon combining:
- *  • A coloured circular bus badge (🚌)
- *  • A white pill label with the bus number, positioned to the right
- */
-const createIcon = (color, busLabel, isSelected) => {
-  const safeLabel = String(busLabel || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const ring = isSelected
-    ? `box-shadow: 0 0 0 3px #3b82f6, 0 2px 6px rgba(0,0,0,0.35);`
-    : `box-shadow: 0 2px 6px rgba(0,0,0,0.35);`;
-
-  return L.divIcon({
-    html: `
-      <div style="
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        pointer-events: none;
-        width: max-content;
-      ">
-        <div style="
-          background-color: ${color};
-          width: 30px;
-          height: 30px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: white;
-          font-size: 14px;
-          border: 3px solid white;
-          ${ring}
-          flex-shrink: 0;
-          transition: box-shadow 0.15s ease;
-        ">&#x1F68C;</div>
-        <div style="
-          background: #ffffff;
-          border: 1.5px solid #d1d5db;
-          border-radius: 999px;
-          padding: 2px 9px;
-          font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-          font-size: 11px;
-          font-weight: 700;
-          color: #1a202c;
-          white-space: nowrap;
-          box-shadow: 0 1px 4px rgba(0,0,0,0.18), 0 0 0 0.5px rgba(0,0,0,0.06);
-          letter-spacing: 0.01em;
-          line-height: 1.5;
-          pointer-events: none;
-        ">${safeLabel}</div>
-      </div>
-    `,
-    iconSize: [140, 30],
-    iconAnchor: [15, 15],
-    className: 'custom-bus-marker',
-  });
+const getBusLabel = (bus, index) => {
+  if (!bus) return `Bus ${index + 1}`;
+  if (bus.busId) return `Bus ${String(bus.busId).padStart(2, '0')}`;
+  if (bus.busNo) return bus.busNo;
+  return bus.route || `Bus ${index + 1}`;
 };
 
 /** Closes the info panel when the map background is clicked */
-function MapClickHandler({ onMapClick }) {
-  useMapEvents({ click: onMapClick });
-  return null;
-}
-
-/** Compact floating bus information panel rendered over the map */
 function BusInfoPanel({ bus, label, onClose }) {
   if (!bus) return null;
   const color = getMarkerColor(bus.status);
@@ -189,72 +131,104 @@ function BusInfoPanel({ bus, label, onClose }) {
   );
 }
 
+const mapContainerStyle = { width: '100%', height: '100%' };
+const googleMapOptions = {
+  disableDefaultUI: true,
+  clickableIcons: false,
+};
+
+const getBusPositionOrFallback = (bus, index) => {
+  if (bus.latitude != null && bus.longitude != null) {
+    return { lat: Number(bus.latitude), lng: Number(bus.longitude) };
+  }
+  return getBusPosition(index);
+};
+
 export default function MapView({ buses = [] }) {
   const [selectedBusId, setSelectedBusId] = useState(null);
+  const mapRef = useRef(null);
 
-  const selectedBus = buses.find(b => b.id === selectedBusId) ?? null;
-  const selectedIndex = buses.findIndex(b => b.id === selectedBusId);
+  const { isLoaded, loadError } = useJsApiLoader({
+    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+  });
 
-  const getBusLabel = (bus, index) => {
-    if (bus.busId) return `Bus ${String(bus.busId).padStart(2, '0')}`;
-    if (bus.busNo) return bus.busNo;
-    return bus.route || `Bus ${index + 1}`;
-  };
+  const selectedBus = buses.find((b) => b.id === selectedBusId) ?? null;
+  const selectedIndex = buses.findIndex((b) => b.id === selectedBusId);
 
-  const handleMarkerClick = (busId, e) => {
-    // Stop click from bubbling to the map (which would close the panel)
-    if (e && e.originalEvent) e.originalEvent.stopPropagation();
-    setSelectedBusId(prev => (prev === busId ? null : busId));
+  const busMarkers = useMemo(
+    () => buses.map((bus, index) => ({ bus, index, position: getBusPositionOrFallback(bus, index) })),
+    [buses]
+  );
+
+  const center = selectedBus
+    ? getBusPositionOrFallback(selectedBus, selectedIndex)
+    : { lat: BASE_LAT, lng: BASE_LNG };
+
+  const handleMarkerClick = (busId) => {
+    setSelectedBusId((prev) => (prev === busId ? null : busId));
   };
 
   const handleMapClick = () => {
     setSelectedBusId(null);
   };
 
+  const onLoad = (map) => {
+    mapRef.current = map;
+    if (busMarkers.length > 0) {
+      const bounds = new window.google.maps.LatLngBounds();
+      busMarkers.forEach(({ position }) => bounds.extend(position));
+      map.fitBounds(bounds, 50);
+    }
+  };
+
+  if (loadError) {
+    return <div style={{ padding: 20 }}>Unable to load Google Maps.</div>;
+  }
+
+  if (!isLoaded) {
+    return <div style={{ padding: 20 }}>Loading map...</div>;
+  }
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-      {/* Keyframe for panel fade-in */}
-      <style>{`
-        @keyframes busInfoFadeIn {
-          from { opacity: 0; transform: translateX(-50%) translateY(10px); }
-          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-        }
-        .custom-bus-marker { background: transparent !important; border: none !important; }
-      `}</style>
-
-      <MapContainer
-        center={[BASE_LAT, BASE_LNG]}
+      <GoogleMap
+        mapContainerStyle={mapContainerStyle}
+        center={center}
         zoom={13}
-        style={{ width: '100%', height: '100%' }}
+        options={googleMapOptions}
+        onLoad={onLoad}
+        onClick={handleMapClick}
       >
-        <TileLayer
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        />
-
-        {/* Close panel on bare map click */}
-        <MapClickHandler onMapClick={handleMapClick} />
-
-        {buses.map((bus, index) => {
-          const { lat, lng } = getBusPosition(index);
+        {busMarkers.map(({ bus, index, position }) => {
           const color = getMarkerColor(bus.status);
           const label = getBusLabel(bus, index);
           const isSelected = bus.id === selectedBusId;
+          const icon = {
+            path: window.google.maps.SymbolPath.CIRCLE,
+            fillColor: color,
+            fillOpacity: 1,
+            scale: isSelected ? 12 : 8,
+            strokeColor: '#ffffff',
+            strokeWeight: 2,
+          };
 
           return (
-            <Marker
+            <MarkerF
               key={bus.id}
-              position={[lat, lng]}
-              icon={createIcon(color, label, isSelected)}
-              eventHandlers={{
-                click: (e) => handleMarkerClick(bus.id, e),
+              position={position}
+              icon={icon}
+              label={{
+                text: label,
+                color: '#1d1d1d',
+                fontSize: '12px',
+                fontWeight: '600',
               }}
+              onClick={() => handleMarkerClick(bus.id)}
             />
           );
         })}
-      </MapContainer>
+      </GoogleMap>
 
-      {/* Floating info panel — overlaid on top of the map, outside MapContainer DOM */}
       {selectedBus && (
         <BusInfoPanel
           bus={selectedBus}

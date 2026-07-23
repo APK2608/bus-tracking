@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Menu, Home, Bus, LogOut } from 'lucide-react';
+import { supabase } from './lib/supabaseClient';
 import Dashboard from './pages/Dashboard';
 import Buses from './pages/BusesPage';
 import Login from './pages/login';
@@ -7,16 +8,24 @@ import Profile from './pages/Profile';
 import LogoutModal from './components/LogoutModal';
 import './App.css';
 
+const mapFromDb = (row) => ({
+  id: row.id,
+  busId: row.bus_number || '',
+  busNo: row.registration_number || '',
+  driver: row.driver_name || '',
+  contact: row.driver_phone || '',
+  route: row.route_name || '',
+  license: row.license_number || '',
+  status: row.status || 'Pending (GPS)',
+  latitude: row.latitude,
+  longitude: row.longitude,
+  capacity: row.capacity,
+});
+
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return sessionStorage.getItem('isLoggedIn') === 'true';
-  });
-  const [userEmail, setUserEmail] = useState(() => {
-    return sessionStorage.getItem('userEmail') || 'admin@example.com';
-  });
-  const [authToken, setAuthToken] = useState(() => {
-    return sessionStorage.getItem('authToken') || null;
-  });
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
   const [buses, setBuses] = useState([]);
   const [currentPage, setCurrentPage] = useState('Dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -28,23 +37,112 @@ export default function App() {
     { name: 'Buses', icon: Bus },
   ];
 
+  const loadBuses = useCallback(async () => {
+    const { data, error } = await supabase.from('buses').select('*').order('id', { ascending: true });
+    if (error) {
+      console.error('Unable to load buses:', error.message);
+      return;
+    }
+    setBuses(Array.isArray(data) ? data.map(mapFromDb) : []);
+  }, []);
+
+  const handleRealtimeUpdate = useCallback((payload) => {
+    const record = payload?.record;
+    if (!record) return;
+    const bus = mapFromDb(record);
+
+    if (payload.eventType === 'INSERT') {
+      setBuses((current) => {
+        if (current.some((item) => item.id === bus.id)) return current;
+        return [...current, bus];
+      });
+      return;
+    }
+
+    if (payload.eventType === 'UPDATE') {
+      setBuses((current) => current.map((item) => (item.id === bus.id ? bus : item)));
+      return;
+    }
+
+    if (payload.eventType === 'DELETE') {
+      setBuses((current) => current.filter((item) => item.id !== bus.id));
+    }
+  }, []);
+
+  useEffect(() => {
+    let authSubscription = null;
+    let realtimeSubscription = null;
+
+    const init = async () => {
+      const { data } = await supabase.auth.getSession();
+      const session = data?.session;
+
+      if (session?.user) {
+        setIsLoggedIn(true);
+        setUserEmail(session.user.email || '');
+      }
+
+      await loadBuses();
+
+      realtimeSubscription = supabase
+        .channel('realtime-buses')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'buses' },
+          handleRealtimeUpdate
+        )
+        .subscribe();
+
+      authSubscription = supabase.auth.onAuthStateChange((event, session) => {
+        const user = session?.user;
+        if (event === 'SIGNED_IN' && user) {
+          setIsLoggedIn(true);
+          setUserEmail(user.email || '');
+        }
+        if (event === 'SIGNED_OUT') {
+          setIsLoggedIn(false);
+          setUserEmail('');
+          setBuses([]);
+        }
+      });
+      setAuthReady(true);
+    };
+
+    init();
+
+    return () => {
+      authSubscription?.subscription?.unsubscribe();
+      realtimeSubscription?.unsubscribe?.();
+    };
+  }, [handleRealtimeUpdate, loadBuses]);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setIsLoggedIn(false);
+    setUserEmail('');
+    setBuses([]);
+  };
+
   const renderPage = () => {
     switch (currentPage) {
-      case 'Dashboard': return <Dashboard buses={buses} />;
-      case 'Buses': return <Buses buses={buses} setBuses={setBuses} />;
-      default: return <Dashboard buses={buses} />;
+      case 'Dashboard':
+        return <Dashboard buses={buses} />;
+      case 'Buses':
+        return <Buses buses={buses} setBuses={setBuses} />;
+      default:
+        return <Dashboard buses={buses} />;
     }
   };
+
+  if (!authReady) {
+    return <div style={{ padding: 24 }}>Loading app...</div>;
+  }
 
   if (!isLoggedIn) {
     return (
       <Login
-        onLogin={({ email, token }) => {
-          sessionStorage.setItem('isLoggedIn', 'true');
-          sessionStorage.setItem('userEmail', email);
-          sessionStorage.setItem('authToken', token);
+        onLogin={({ email }) => {
           setUserEmail(email);
-          setAuthToken(token);
           setIsLoggedIn(true);
         }}
       />
@@ -54,15 +152,25 @@ export default function App() {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', backgroundColor: '#f5f5f5' }}>
       {/* Sidebar */}
-      <div style={{
-        width: sidebarOpen ? '250px' : '70px',
-        backgroundColor: '#2c3e50',
-        color: 'white',
-        transition: 'width 0.3s ease',
-        overflowY: 'auto',
-        position: 'relative'
-      }}>
-        <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div
+        style={{
+          width: sidebarOpen ? '250px' : '70px',
+          backgroundColor: '#2c3e50',
+          color: 'white',
+          transition: 'width 0.3s ease',
+          overflowY: 'auto',
+          position: 'relative',
+        }}
+      >
+        <div
+          style={{
+            padding: '20px',
+            borderBottom: '1px solid rgba(255,255,255,0.1)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
           {sidebarOpen && <h2 style={{ margin: 0, fontSize: '18px' }}>AmcetTransit</h2>}
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -73,7 +181,7 @@ export default function App() {
         </div>
 
         <nav style={{ padding: '20px 0' }}>
-          {navigationItems.map(item => {
+          {navigationItems.map((item) => {
             const IconComponent = item.icon;
             return (
               <div
@@ -89,7 +197,7 @@ export default function App() {
                   gap: '15px',
                   transition: 'all 0.2s ease',
                   fontSize: '14px',
-                  whiteSpace: 'nowrap'
+                  whiteSpace: 'nowrap',
                 }}
               >
                 <IconComponent size={20} />
@@ -103,19 +211,20 @@ export default function App() {
       {/* Main Content */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* Header */}
-        <header style={{
-          backgroundColor: 'white',
-          padding: '20px 30px',
-          borderBottom: '1px solid #ddd',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-        }}>
+        <header
+          style={{
+            backgroundColor: 'white',
+            padding: '20px 30px',
+            borderBottom: '1px solid #ddd',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          }}
+        >
           <h1 style={{ margin: 0, fontSize: '24px', color: '#2c3e50' }}>{currentPage}</h1>
 
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-            {/* ── Logout button (icon-only, door-exit style) ── */}
             <button
               title="Logout"
               onClick={() => setShowLogoutModal(true)}
@@ -134,13 +243,13 @@ export default function App() {
                 transition: 'background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease',
                 flexShrink: 0,
               }}
-              onMouseEnter={e => {
+              onMouseEnter={(e) => {
                 e.currentTarget.style.backgroundColor = '#fff5f5';
                 e.currentTarget.style.color = '#e53e3e';
                 e.currentTarget.style.borderColor = '#fed7d7';
                 e.currentTarget.style.boxShadow = '0 2px 8px rgba(229,62,62,0.14)';
               }}
-              onMouseLeave={e => {
+              onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = '#ffffff';
                 e.currentTarget.style.color = '#718096';
                 e.currentTarget.style.borderColor = '#e2e8f0';
@@ -150,8 +259,7 @@ export default function App() {
               <LogOut size={18} strokeWidth={2} />
             </button>
 
-            {/* Profile avatar */}
-            <div 
+            <div
               onClick={() => setShowProfileModal(true)}
               style={{
                 width: '38px',
@@ -168,43 +276,35 @@ export default function App() {
                 boxShadow: '0 1px 3px rgba(52,152,219,0.3)',
               }}
             >
-              AD
+              {userEmail ? userEmail.charAt(0).toUpperCase() : 'A'}
             </div>
           </div>
         </header>
 
-        {/* Content Area */}
-        <div style={{
-          flex: 1,
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-          padding: '20px 30px',
-          backgroundColor: '#f5f5f5'
-        }}>
+        <div
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '20px 30px',
+            backgroundColor: '#f5f5f5',
+          }}
+        >
           {renderPage()}
         </div>
       </div>
 
-      {/* ── Logout confirmation modal ── */}
       <LogoutModal
         isOpen={showLogoutModal}
         onCancel={() => setShowLogoutModal(false)}
-        onConfirm={() => {
-          localStorage.clear();
-          sessionStorage.clear();
-          setIsLoggedIn(false);
-          setAuthToken(null);
+        onConfirm={async () => {
+          await handleLogout();
           setShowLogoutModal(false);
         }}
       />
 
-      {/* ── Profile modal popup ── */}
-      <Profile
-        isOpen={showProfileModal}
-        onClose={() => setShowProfileModal(false)}
-        email={userEmail}
-      />
+      <Profile isOpen={showProfileModal} onClose={() => setShowProfileModal(false)} email={userEmail} />
     </div>
   );
 }

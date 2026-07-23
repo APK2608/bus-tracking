@@ -220,8 +220,7 @@
   overflow: hidden;
 }
 
-.map-card__body>div,
-.map-card__body .leaflet-container {
+.map-card__body>div {
   width: 100% !important;
   height: 100% !important;
 }
@@ -345,8 +344,7 @@
   position: relative;
 }
 
-.map-fullscreen-body>div,
-.map-fullscreen-body .leaflet-container {
+.map-fullscreen-body>div {
   width: 100% !important;
   height: 100% !important;
 }
@@ -827,8 +825,7 @@
   position: relative;
 }
 
-.track-map-area > div,
-.track-map-area .leaflet-container {
+.track-map-area > div {
   width: 100% !important;
   height: 100% !important;
 }
